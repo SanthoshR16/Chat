@@ -1,13 +1,12 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { Send, Hash, MoreVertical, AlertCircle, ShieldAlert, Bot, Paperclip, Image as ImageIcon, Loader2, Sparkles, User, X, BadgeCheck, Clock } from 'lucide-react';
-import { Message, Profile, Friend } from '../types';
+import { Send, Hash, MoreVertical, ShieldAlert, Bot, Image as ImageIcon, Loader2, Sparkles, Zap, Clock } from 'lucide-react';
+import { Message, Profile, Friend, ToxicityLabel } from '../types';
 import { analyzeToxicity, getGeminiChat } from '../lib/gemini';
 import { Chat as GeminiChatType } from '@google/genai';
-import { NeonButton, ProfileViewModal } from '../components/UI';
+import { ProfileViewModal } from '../components/UI';
 
-// AI Bot Constant
 const AI_BOT_PROFILE: Profile = {
   id: 'ai-bot-giggle-2025',
   username: 'Giggle AI',
@@ -18,36 +17,14 @@ const AI_BOT_PROFILE: Profile = {
 
 const TOXIC_MARKER = "[[TOXIC_FLAG]]";
 
-// Helper: Relative Time Formatting
 const formatRelativeTime = (dateString: string, now: number): string => {
   const date = new Date(dateString);
   const diffInSeconds = Math.floor((now - date.getTime()) / 1000);
-
-  if (diffInSeconds < 5) return 'Just now';
+  if (diffInSeconds < 10) return 'Just now';
   if (diffInSeconds < 60) return `${diffInSeconds}s ago`;
-  
   const diffInMinutes = Math.floor(diffInSeconds / 60);
   if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
-  
-  const diffInHours = Math.floor(diffInMinutes / 60);
-  if (diffInHours < 24) return `${diffInHours}h ago`;
-  
-  const diffInDays = Math.floor(diffInHours / 24);
-  if (diffInDays < 7) return `${diffInDays}d ago`;
-  
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-};
-
-// Helper: Detailed Time Formatting
-const formatFullTime = (dateString: string): string => {
-  const date = new Date(dateString);
-  return date.toLocaleString([], { 
-    month: 'short', 
-    day: 'numeric', 
-    hour: 'numeric', 
-    minute: '2-digit',
-    second: '2-digit'
-  });
 };
 
 export const ChatPage = () => {
@@ -57,31 +34,20 @@ export const ChatPage = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
-  const [isTyping, setIsTyping] = useState(false);
   const [friendIsTyping, setFriendIsTyping] = useState(false);
-  
-  // Tick for relative time updates
   const [now, setNow] = useState(Date.now());
-  
-  // Profile View Modal
   const [viewProfile, setViewProfile] = useState<Profile | null>(null);
   
-  // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const aiSessionRef = useRef<GeminiChatType | null>(null);
   const realtimeChannelRef = useRef<any>(null);
 
-  // Update "now" every 10 seconds to keep relative times fresh
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 10000);
+    const timer = setInterval(() => setNow(Date.now()), 15000);
     return () => clearInterval(timer);
   }, []);
 
-  // 1. Initialize User & Global Presence
   useEffect(() => {
     const init = async () => {
       const { data } = await supabase.auth.getUser();
@@ -89,7 +55,6 @@ export const ChatPage = () => {
       setCurrentUser(data.user);
       fetchFriends(data.user.id);
 
-      // Presence Channel (Track who is online)
       const presenceChannel = supabase.channel('global_presence');
       presenceChannel
         .on('presence', { event: 'sync' }, () => {
@@ -104,57 +69,41 @@ export const ChatPage = () => {
         })
         .subscribe(async (status) => {
           if (status === 'SUBSCRIBED') {
-            await presenceChannel.track({ 
-                user_id: data.user.id, 
-                online_at: new Date().toISOString() 
-            });
+            await presenceChannel.track({ user_id: data.user.id });
           }
         });
-
-      return () => {
-        supabase.removeChannel(presenceChannel);
-      };
+      return () => { supabase.removeChannel(presenceChannel); };
     };
     init();
   }, []);
 
   const fetchFriends = async (userId: string) => {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('friends')
       .select('friend_id, friend:profiles!friends_friend_id_fkey(*)')
       .eq('user_id', userId);
     
-    if (error) {
-        console.error("Error fetching friends:", error.message);
-        if (error.code === 'PGRST205') setErrorMsg("Database tables missing.");
-    }
-
-    const realFriends = data ? (data as unknown as Friend[]).map(f => f.friend) : [];
+    const realFriends = data ? (data as any[]).map(f => f.friend).filter(f => f) : [];
     setFriends([AI_BOT_PROFILE, ...realFriends]);
   };
 
-  // 2. Chat Logic (Messages & Typing)
   useEffect(() => {
     if (!activeFriend || !currentUser) return;
-    
-    // Reset state for new chat
     setMessages([]);
     setFriendIsTyping(false);
 
-    // --- AI CHAT FLOW ---
     if (activeFriend.is_bot) {
       aiSessionRef.current = getGeminiChat();
       setMessages([{
         id: 'intro-ai',
         sender_id: activeFriend.id,
         receiver_id: currentUser.id,
-        content: "Hello! I am Giggle AI. I can generate code, tell jokes, or just chat. What's on your mind?",
+        content: "Neural link established. How can I assist you today? 🤖",
         created_at: new Date().toISOString()
       }]);
       return; 
     }
 
-    // --- REALTIME SUPABASE CHAT FLOW ---
     const fetchMessages = async () => {
       const { data } = await supabase
         .from('messages')
@@ -165,7 +114,6 @@ export const ChatPage = () => {
     };
     fetchMessages();
 
-    // Channel for this specific pair
     const channelName = `room_${[currentUser.id, activeFriend.id].sort().join('_')}`;
     const channel = supabase.channel(channelName);
     realtimeChannelRef.current = channel;
@@ -174,442 +122,232 @@ export const ChatPage = () => {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
         const newMsg = payload.new as Message;
         if (newMsg.sender_id === currentUser.id) return;
-
-        const isRelevant = 
-            (newMsg.sender_id === activeFriend.id && newMsg.receiver_id === currentUser.id);
-            
-        if (isRelevant) {
+        if ((newMsg.sender_id === activeFriend.id && newMsg.receiver_id === currentUser.id) || 
+            (newMsg.sender_id === currentUser.id && newMsg.receiver_id === activeFriend.id)) {
             setMessages((prev) => {
-                if (prev.some(m => m.id === newMsg.id)) return prev;
+                const exists = prev.some(m => m.id === newMsg.id);
+                if (exists) return prev;
                 return [...prev, newMsg];
             });
-            if (newMsg.sender_id === activeFriend.id) setFriendIsTyping(false);
+            setFriendIsTyping(false);
         }
-      })
-      .on('broadcast', { event: 'typing' }, (payload) => {
-         if (payload.payload.sender_id === activeFriend.id) {
-             setFriendIsTyping(true);
-             setTimeout(() => setFriendIsTyping(false), 3000);
-         }
       })
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-      realtimeChannelRef.current = null;
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [activeFriend, currentUser]);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, friendIsTyping]);
 
-  // --- Handlers ---
-
-  const handleTyping = () => {
-    if (!activeFriend || activeFriend.is_bot || !realtimeChannelRef.current || !currentUser) return;
-    
-    if (!isTyping) {
-        setIsTyping(true);
-        realtimeChannelRef.current.send({
-            type: 'broadcast',
-            event: 'typing',
-            payload: { sender_id: currentUser.id }
-        });
-        
-        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-        typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 2000);
-    }
-  };
-
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.size > 1024 * 500) { 
-        alert("File too large. Please select an image under 500KB.");
-        return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-        const base64 = ev.target?.result as string;
-        await processSendMessage(base64, true);
-    };
-    reader.readAsDataURL(file);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
   const processSendMessage = async (content: string, isImage = false) => {
     if ((!content.trim() && !isImage) || !currentUser || !activeFriend || isSending) return;
+    
     setIsSending(true);
+    const textToProcess = content;
+    setNewMessage(''); 
 
-    const messageContent = isImage ? `[IMAGE]${content}` : content;
     const tempId = `temp-${Date.now()}`;
-
-    const optimisiticMessage: Message = {
+    const optimisticMsg: Message = {
         id: tempId,
-        content: messageContent,
+        content: textToProcess,
         sender_id: currentUser.id,
         receiver_id: activeFriend.id,
-        created_at: new Date().toISOString(),
-        is_toxic: false
+        created_at: new Date().toISOString()
     };
-    setMessages(prev => [...prev, optimisiticMessage]);
-    setNewMessage('');
+    setMessages(prev => [...prev, optimisticMsg]);
 
-    if (activeFriend.is_bot) {
-        try {
-            setFriendIsTyping(true);
-            setIsSending(false);
-            
-            let responseText = "Thinking...";
-            if (aiSessionRef.current) {
-                const prompt = isImage ? "I sent you an image." : content;
-                const result = await aiSessionRef.current.sendMessage({ message: prompt });
-                responseText = result.text || "I cannot reply right now.";
-            }
+    try {
+      let isToxic = false;
+      if (!isImage) {
+          const analysis = await analyzeToxicity(textToProcess);
+          if (analysis.label !== ToxicityLabel.SAFE) isToxic = true;
+      }
 
-            const aiMsgObj: Message = {
-                id: `ai-${Date.now()}`,
-                content: responseText,
-                sender_id: activeFriend.id,
-                receiver_id: currentUser.id,
-                created_at: new Date().toISOString()
-            };
-            setMessages(prev => [...prev, aiMsgObj]);
-        } catch (err) {
-            console.error("AI Error", err);
-        } finally {
-            setFriendIsTyping(false);
-        }
-        return;
+      const finalContent = isToxic ? `${TOXIC_MARKER}${textToProcess}` : (isImage ? `[IMAGE]${textToProcess}` : textToProcess);
+      
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, content: finalContent, is_toxic: isToxic } : m));
+
+      if (activeFriend.is_bot) {
+          if (!isToxic && aiSessionRef.current) {
+              setFriendIsTyping(true);
+              const result = await aiSessionRef.current.sendMessage({ message: textToProcess });
+              setMessages(prev => [...prev, {
+                  id: `ai-${Date.now()}`,
+                  content: result.text || "...",
+                  sender_id: activeFriend.id,
+                  receiver_id: currentUser.id,
+                  created_at: new Date().toISOString()
+              }]);
+              setFriendIsTyping(false);
+          }
+          setIsSending(false);
+          return;
+      }
+
+      const payload: any = {
+        content: finalContent,
+        sender_id: currentUser.id,
+        receiver_id: activeFriend.id,
+        is_toxic: isToxic
+      };
+
+      const { data, error } = await supabase.from('messages').insert(payload).select().single();
+      
+      if (error) {
+          const { error: fallbackError } = await supabase.from('messages').insert({
+              content: finalContent,
+              sender_id: currentUser.id,
+              receiver_id: activeFriend.id
+          });
+          if (fallbackError) throw fallbackError;
+      } else if (data) {
+          setMessages(prev => prev.map(m => m.id === tempId ? data : m));
+      }
+    } catch (e) {
+      console.error("Critical Messaging Error:", e);
+      setMessages(prev => prev.filter(m => m.id !== tempId));
+      alert("Neural link unstable. Message failed to persist.");
+    } finally {
+      setIsSending(false);
     }
-
-    (async () => {
-        let isToxic = false;
-        if (!isImage) {
-           try {
-              const analysis = await analyzeToxicity(messageContent);
-              if (analysis.score > 50) isToxic = true;
-           } catch (e) {
-              console.warn("Toxicity check failed, proceeding safely.");
-           }
-        }
-
-        if (isToxic) {
-             setMessages(prev => prev.map(m => m.id === tempId ? { ...m, is_toxic: true } : m));
-        }
-
-        const insertPayload: any = {
-          content: messageContent,
-          sender_id: currentUser.id,
-          receiver_id: activeFriend.id,
-          is_toxic: isToxic
-        };
-
-        let { data, error } = await supabase.from('messages').insert(insertPayload).select().single();
-        
-        if (error && (error.code === 'PGRST204' || error.code === '42703' || error.message?.includes('is_toxic'))) {
-            if (isToxic) {
-                delete insertPayload.is_toxic;
-                insertPayload.content = TOXIC_MARKER + messageContent;
-            } else {
-                delete insertPayload.is_toxic;
-            }
-            const retry = await supabase.from('messages').insert(insertPayload).select().single();
-            data = retry.data;
-            error = retry.error;
-        }
-
-        setIsSending(false);
-
-        if (error) {
-            console.error("Send failed:", error);
-            setMessages(prev => prev.filter(m => m.id !== tempId));
-        } else if (data) {
-            setMessages(prev => prev.map(m => m.id === tempId ? data : m));
-        }
-    })();
   };
 
   const renderMessageContent = (content: string, isToxic: boolean | undefined) => {
-    const isToxicContent = isToxic || content.includes(TOXIC_MARKER);
-    if (isToxicContent) {
+    if (isToxic || content.includes(TOXIC_MARKER)) {
         return (
-            <div className="flex items-center gap-2 text-red-300 italic opacity-70">
+            <div className="flex items-center gap-2 text-red-300 italic">
                 <ShieldAlert className="w-4 h-4" />
-                <span className="blur-[2px] select-none text-xs font-bold tracking-widest">[CONTENT HIDDEN]</span>
+                <span className="blur-[4px] select-none text-[10px] uppercase font-bold tracking-widest">SIGNAL REFRESHED BY SECURITY</span>
             </div>
         );
     }
     if (content.startsWith('[IMAGE]')) {
-        const imgSrc = content.replace('[IMAGE]', '');
-        return (
-            <div className="mt-1 mb-1 group relative">
-                <img 
-                    src={imgSrc} 
-                    alt="Shared" 
-                    onLoad={() => messagesEndRef.current?.scrollIntoView()}
-                    className="max-w-full rounded-lg max-h-64 object-cover border border-white/10 shadow-lg cursor-pointer transition-transform hover:scale-[1.02]" 
-                />
-            </div>
-        );
+        return <img src={content.replace('[IMAGE]', '')} className="max-w-full rounded-lg max-h-64 object-cover border border-white/10 shadow-lg" alt="Shared" />;
     }
-    return <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{content}</p>;
+    return <p className="text-[15px] md:text-base leading-relaxed whitespace-pre-wrap">{content}</p>;
   };
 
-  if (errorMsg) {
-      return (
-          <div className="flex items-center justify-center h-full">
-              <div className="text-center p-6 border border-red-500/50 bg-red-500/10 rounded-xl">
-                  <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-3" />
-                  <p className="text-red-200">{errorMsg}</p>
-              </div>
-          </div>
-      );
-  }
-
   return (
-    <div className="flex h-full overflow-hidden bg-[#050510] relative">
-      <div className="absolute inset-0 pointer-events-none">
-         <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-neon-purple/5 rounded-full blur-[100px]" />
-         <div className="absolute top-0 left-0 w-[500px] h-[500px] bg-neon-blue/5 rounded-full blur-[100px]" />
-      </div>
-
-      <div className={`w-80 glass-panel border-r border-white/5 flex flex-col z-10 ${activeFriend ? 'hidden md:flex' : 'flex w-full'}`}>
-        <div className="p-5 border-b border-white/5 bg-black/20 backdrop-blur-md">
-          <h2 className="text-lg font-display font-bold text-white tracking-wide flex items-center gap-2">
-            <Hash className="w-4 h-4 text-neon-blue" />
-            Active Channels
+    <div className="flex h-full overflow-hidden bg-[#050510]">
+      {/* Sidebar - Friend List */}
+      <div className={`w-full lg:w-80 glass-panel border-r border-white/5 flex flex-col ${activeFriend ? 'hidden lg:flex' : 'flex'}`}>
+        <div className="p-6 border-b border-white/5 bg-black/20">
+          <h2 className="text-xl font-display font-bold text-white tracking-wide flex items-center gap-3">
+            <Hash className="w-5 h-5 text-neon-blue" /> Signals
           </h2>
         </div>
-        <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
-          {friends.length === 0 ? (
-            <div className="text-gray-500 text-center mt-10 p-4 animate-pulse">
-              <Loader2 className="w-8 h-8 mx-auto mb-2 opacity-50 animate-spin" />
-              <p className="text-xs tracking-widest uppercase">Syncing Network...</p>
-            </div>
-          ) : (
-            friends.map((friend) => {
-              const isOnline = friend.is_bot || onlineUsers.has(friend.id);
-              return (
-                <button
-                  key={friend.id}
-                  onClick={() => setActiveFriend(friend)}
-                  className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-300 group relative overflow-hidden ${
-                    activeFriend?.id === friend.id
-                      ? 'bg-gradient-to-r from-neon-purple/20 to-transparent border border-neon-purple/40'
-                      : 'hover:bg-white/5 border border-transparent'
-                  }`}
-                >
-                  <div className="relative">
-                    <img 
-                        src={friend.avatar_url || 'https://picsum.photos/50'} 
-                        alt={friend.username} 
-                        className={`w-12 h-12 rounded-full border-2 object-cover transition-transform group-hover:scale-105 ${
-                            friend.is_bot ? 'border-neon-purple' : isOnline ? 'border-green-400' : 'border-gray-600'
-                        }`} 
-                    />
-                    {friend.is_bot ? (
-                      <div className="absolute -bottom-1 -right-1 bg-black rounded-full p-0.5 z-10">
-                         <Bot className="w-4 h-4 text-neon-purple" />
-                      </div>
-                    ) : (
-                      <div className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-[#050510] ${
-                          isOnline ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-gray-500'
-                      }`} />
-                    )}
-                  </div>
-                  <div className="text-left flex-1 min-w-0 z-10">
-                    <div className="flex justify-between items-center mb-0.5">
-                      <span className={`font-bold text-sm truncate ${friend.is_bot ? 'text-neon-purple drop-shadow-[0_0_5px_rgba(176,38,255,0.5)]' : 'text-white'}`}>
-                          {friend.username}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                        <span className={`text-[10px] uppercase tracking-wider font-medium ${isOnline ? 'text-green-400' : 'text-gray-600'}`}>
-                            {isOnline ? 'Online' : 'Offline'}
-                        </span>
-                        {activeFriend?.id === friend.id && friendIsTyping && (
-                            <span className="text-[10px] text-neon-blue animate-pulse ml-auto">typing...</span>
-                        )}
-                    </div>
-                  </div>
-                  <div className="absolute inset-0 bg-gradient-to-r from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-                </button>
-              );
-            })
-          )}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+          {friends.map(friend => (
+            <button 
+              key={friend.id} 
+              onClick={() => setActiveFriend(friend)} 
+              className={`w-full flex items-center gap-4 p-4 rounded-2xl transition-all duration-300 ${activeFriend?.id === friend.id ? 'bg-white/10 border-white/20 shadow-[0_0_20px_rgba(255,255,255,0.05)]' : 'hover:bg-white/5 border-transparent'} border`}
+            >
+               <div className="relative">
+                 <img src={friend.avatar_url} className="w-12 h-12 rounded-full border border-white/10" alt="av" />
+                 {onlineUsers.has(friend.id) && <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-[#050510]" />}
+               </div>
+               <div className="text-left flex-1 truncate">
+                 <div className="font-bold text-base text-white truncate">{friend.username}</div>
+                 <div className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">{friend.is_bot ? 'AI Neural Core' : 'Direct Uplink'}</div>
+               </div>
+            </button>
+          ))}
         </div>
       </div>
 
+      {/* Main Chat Area */}
       {activeFriend ? (
-        <div className="flex-1 flex flex-col relative z-10 bg-black/40 backdrop-blur-sm">
-          <div 
-             className="glass-panel p-4 flex justify-between items-center border-b border-white/5 shadow-lg z-20 cursor-pointer hover:bg-white/5 transition-colors"
-             onClick={() => setViewProfile(activeFriend)}
-          >
+        <div className="flex-1 flex flex-col relative bg-black/10">
+          {/* Header */}
+          <div className="glass-panel p-4 md:p-6 flex justify-between items-center border-b border-white/5 z-10">
             <div className="flex items-center gap-4">
-              <button onClick={(e) => { e.stopPropagation(); setActiveFriend(null); }} className="md:hidden p-2 hover:bg-white/10 rounded-full text-gray-400">
-                ←
+              <button onClick={() => setActiveFriend(null)} className="lg:hidden p-2 text-gray-400 hover:text-white transition-colors">
+                <Zap className="w-6 h-6" />
               </button>
-              <div className="relative">
-                 <img src={activeFriend.avatar_url} className="w-10 h-10 rounded-full border border-white/10" alt="av" />
-                 {(activeFriend.is_bot || onlineUsers.has(activeFriend.id)) && (
-                     <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-black rounded-full animate-pulse" />
-                 )}
+              <div className="relative cursor-pointer" onClick={() => setViewProfile(activeFriend)}>
+                <img src={activeFriend.avatar_url} className="w-10 h-10 md:w-12 md:h-12 rounded-full border border-white/10" alt="av" />
+                <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#050510] ${onlineUsers.has(activeFriend.id) ? 'bg-green-500' : 'bg-gray-600'}`} />
               </div>
-              <div>
-                <h3 className="font-bold flex items-center gap-2 text-white">
-                    {activeFriend.username}
-                    {activeFriend.is_bot && <Sparkles className="w-3 h-3 text-neon-purple" />}
-                </h3>
-                <span className={`text-xs flex items-center gap-1.5 ${
-                    activeFriend.is_bot || onlineUsers.has(activeFriend.id) ? 'text-neon-blue' : 'text-gray-500'
-                }`}>
-                    {activeFriend.is_bot || onlineUsers.has(activeFriend.id) ? (
-                        <>● Signal Strong</>
-                    ) : (
-                        <>○ Signal Lost</>
-                    )}
+              <div className="cursor-pointer" onClick={() => setViewProfile(activeFriend)}>
+                <h3 className="font-bold text-white text-base md:text-lg leading-none mb-1">{activeFriend.username}</h3>
+                <span className="text-[10px] text-neon-blue uppercase tracking-[0.2em] flex items-center gap-1 font-bold animate-pulse">
+                   SECURE LINK
                 </span>
               </div>
             </div>
-            <MoreVertical className="text-gray-500 cursor-pointer hover:text-white transition-colors" />
+            <MoreVertical className="text-gray-500 cursor-pointer hover:text-white" />
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 custom-scrollbar">
-            {messages.map((msg, index) => {
-              const isMe = msg.sender_id === currentUser?.id;
-              // @ts-ignore
-              const isToxic = msg.is_toxic;
-              const msgDate = new Date(msg.created_at);
-              const showDivider = index === 0 || (msgDate.getTime() - new Date(messages[index - 1].created_at).getTime() > 600000); // 10 min gap
-
-              return (
-                <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} group/msg`}>
-                  {showDivider && (
-                      <div className="w-full flex items-center gap-4 my-6 opacity-40">
-                          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gray-500 to-transparent" />
-                          <span className="text-[10px] uppercase tracking-[0.2em] font-display text-gray-400">
-                              {msgDate.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} • {msgDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                          </span>
-                          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gray-500 to-transparent" />
-                      </div>
-                  )}
-                  
-                  <div className={`flex ${isMe ? 'justify-end' : 'justify-start'} group relative max-w-[85%] md:max-w-[70%]`}>
-                    <div
-                      title={formatFullTime(msg.created_at)}
-                      className={`px-5 py-3 rounded-2xl relative shadow-lg transition-all duration-300 animate-message-in cursor-default ${
-                        isMe
-                          ? 'bg-gradient-to-br from-neon-purple to-violet-700 text-white rounded-tr-sm shadow-[0_4px_15px_rgba(176,38,255,0.3)] hover:shadow-[0_4px_25px_rgba(176,38,255,0.5)]'
-                          : 'bg-[#1a1a2e] text-gray-100 rounded-tl-sm border border-white/10 hover:border-white/20 hover:bg-[#1e1e35]'
-                      }`}
-                    >
-                      {renderMessageContent(msg.content, isToxic)}
-                    </div>
+          {/* Messages List */}
+          <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8 custom-scrollbar">
+            <div className="max-w-4xl mx-auto space-y-8">
+              {messages.map((msg, i) => {
+                const isMe = msg.sender_id === currentUser?.id;
+                return (
+                  <div key={msg.id || i} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-message-in`}>
+                     <div className={`px-5 py-4 rounded-3xl max-w-[85%] md:max-w-[70%] lg:max-w-[60%] ${
+                       isMe 
+                        ? 'bg-neon-purple text-white rounded-tr-none shadow-[0_8px_30px_rgba(176,38,255,0.2)]' 
+                        : 'bg-slate-800 text-gray-100 rounded-tl-none border border-white/5 shadow-xl'
+                     }`}>
+                        {renderMessageContent(msg.content, msg.is_toxic)}
+                     </div>
+                     <div className={`flex items-center gap-3 mt-2 px-1 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
+                        <span className="text-[10px] text-gray-600 uppercase tracking-widest font-bold">
+                          {formatRelativeTime(msg.created_at, now)}
+                        </span>
+                        {isMe && <span className="text-[8px] text-neon-blue/60 font-black uppercase tracking-[0.2em]">Delivered</span>}
+                     </div>
                   </div>
-                  
-                  {/* Status & Relative Time Row */}
-                  <div className={`flex items-center gap-2 mt-1.5 px-2 transition-opacity duration-300 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
-                    <span className="text-[10px] font-medium text-gray-500/80 group-hover/msg:text-neon-blue transition-colors">
-                      {formatRelativeTime(msg.created_at, now)}
-                    </span>
-                    {isMe && (
-                      <span className="text-[9px] uppercase tracking-widest text-gray-600 font-bold group-hover/msg:opacity-100 opacity-40 transition-opacity">
-                        Delivered
-                      </span>
-                    )}
-                    {/* Detailed Timestamp on Hover */}
-                    <span className="text-[9px] text-gray-700 font-mono hidden group-hover/msg:inline-block border-l border-gray-800 pl-2">
-                      {msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </span>
-                  </div>
+                );
+              })}
+              {friendIsTyping && (
+                <div className="flex items-center gap-2 text-[10px] text-neon-blue animate-pulse ml-2 font-bold tracking-widest uppercase">
+                  <Bot className="w-3 h-3" /> Neural thinking...
                 </div>
-              );
-            })}
-            
-            {friendIsTyping && (
-                <div className="flex justify-start animate-message-in">
-                    <div className="bg-[#1a1a2e] border border-white/10 px-4 py-3 rounded-2xl rounded-tl-sm flex gap-1.5 items-center shadow-lg">
-                        <div className="w-1.5 h-1.5 bg-neon-blue rounded-full animate-bounce" />
-                        <div className="w-1.5 h-1.5 bg-neon-blue rounded-full animate-bounce delay-100" />
-                        <div className="w-1.5 h-1.5 bg-neon-blue rounded-full animate-bounce delay-200" />
-                    </div>
-                </div>
-            )}
-            <div ref={messagesEndRef} />
+              )}
+              <div ref={messagesEndRef} />
+            </div>
           </div>
 
-          <div className="p-4 glass-panel border-t border-white/5 relative z-20">
-            <div className="flex gap-3 items-end max-w-5xl mx-auto">
-              <input 
-                 type="file" 
-                 accept="image/*" 
-                 className="hidden" 
-                 ref={fileInputRef}
-                 onChange={handleImageUpload}
-              />
-              <button 
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isSending}
-                className="p-3 mb-1 rounded-full bg-white/5 text-gray-400 hover:text-neon-blue hover:bg-white/10 transition-colors disabled:opacity-50"
-              >
-                <ImageIcon className="w-5 h-5" />
-              </button>
-              <div className="flex-1 relative">
+          {/* Input Area */}
+          <div className="p-4 md:p-6 lg:p-8 bg-gradient-to-t from-[#050510] to-transparent">
+            <div className="flex gap-4 items-end max-w-4xl mx-auto">
+              <div className="flex-1 relative group">
                 <textarea
                     value={newMessage}
-                    onChange={(e) => {
-                        setNewMessage(e.target.value);
-                        handleTyping();
-                    }}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            processSendMessage(newMessage);
-                        }
-                    }}
-                    placeholder={isSending ? "Transmitting..." : activeFriend.is_bot ? "Ask Giggle AI..." : "Message..."}
-                    disabled={isSending}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); processSendMessage(newMessage); } }}
+                    placeholder={isSending ? "Scanning..." : "Transmit data..."}
+                    className="w-full bg-slate-900/80 backdrop-blur-md border border-white/10 rounded-2xl p-4 md:p-5 text-white focus:outline-none focus:border-neon-blue transition-all resize-none min-h-[60px] max-h-32 custom-scrollbar shadow-2xl"
                     rows={1}
-                    className="w-full bg-slate-800/80 border border-white/10 rounded-2xl pl-5 pr-12 py-3.5 text-white focus:outline-none focus:border-neon-purple focus:shadow-[0_0_15px_rgba(176,38,255,0.2)] transition-all placeholder-gray-500 disabled:opacity-50 resize-none min-h-[50px] custom-scrollbar"
                 />
+                {isSending && <div className="absolute right-5 top-1/2 -translate-y-1/2"><Loader2 className="w-5 h-5 animate-spin text-neon-blue" /></div>}
               </div>
               <button
                 onClick={() => processSendMessage(newMessage)}
-                disabled={(!newMessage.trim() && !isSending) || isSending}
-                className={`mb-1 w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 shadow-[0_0_20px_rgba(176,38,255,0.4)] ${
-                    (!newMessage.trim() && !isSending)
-                    ? 'bg-gray-700 opacity-50 cursor-not-allowed shadow-none' 
-                    : 'bg-gradient-to-tr from-neon-purple to-neon-blue hover:scale-105 active:scale-95'
-                }`}
+                disabled={!newMessage.trim() || isSending}
+                className="w-14 h-14 md:w-16 md:h-16 rounded-2xl bg-gradient-to-tr from-neon-purple to-neon-blue flex items-center justify-center hover:scale-105 active:scale-95 transition-all disabled:opacity-50 shadow-xl shadow-neon-blue/20 shrink-0"
               >
-                {isSending ? <Loader2 className="w-5 h-5 animate-spin text-white" /> : <Send className="w-5 h-5 text-white ml-0.5" />}
+                <Send className="w-6 h-6 text-white ml-1" />
               </button>
             </div>
           </div>
         </div>
       ) : (
-        <div className="hidden md:flex flex-1 flex-col items-center justify-center text-gray-500 opacity-60 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]">
-          <div className="w-32 h-32 bg-gradient-to-br from-white/5 to-transparent rounded-full flex items-center justify-center mb-6 border border-white/10 shadow-[0_0_30px_rgba(0,0,0,0.5)] animate-pulse-slow">
-            <Hash className="w-12 h-12 text-neon-blue" />
-          </div>
-          <h2 className="text-3xl font-display font-bold text-white mb-2">GiggleChat // Hub</h2>
-          <p className="max-w-md text-center text-sm">Select a user from the neural network to establish a secure connection.</p>
+        <div className="hidden lg:flex flex-1 flex-col items-center justify-center text-gray-700 bg-black/5">
+           <div className="relative mb-8">
+             <Zap className="w-24 h-24 opacity-5 animate-pulse" />
+             <div className="absolute inset-0 bg-neon-blue/10 blur-[60px] rounded-full animate-blob" />
+           </div>
+           <p className="font-display tracking-[0.5em] uppercase text-xs font-bold text-gray-500">Neural Link Offline</p>
+           <p className="text-[10px] uppercase tracking-widest text-gray-600 mt-2">Select a signal to begin transmission</p>
         </div>
       )}
-
-      {viewProfile && (
-        <ProfileViewModal 
-            user={viewProfile} 
-            isOnline={viewProfile.is_bot || onlineUsers.has(viewProfile.id)}
-            onClose={() => setViewProfile(null)} 
-        />
-      )}
+      {viewProfile && <ProfileViewModal user={viewProfile} isOnline={onlineUsers.has(viewProfile.id)} onClose={() => setViewProfile(null)} />}
     </div>
   );
 };

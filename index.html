@@ -3,7 +3,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>GiggleChat // Future of Connection</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
@@ -51,30 +51,42 @@
       }
     </script>
     <style>
+      :root {
+        --vh: 1vh;
+      }
       body {
         background-color: #050510;
         color: #ffffff;
         overflow-x: hidden;
+        min-height: 100vh;
+        min-height: -webkit-fill-available;
+      }
+      html {
+        height: -webkit-fill-available;
       }
       /* Custom Scrollbar */
       ::-webkit-scrollbar {
-        width: 8px;
+        width: 6px;
       }
       ::-webkit-scrollbar-track {
-        background: #0f172a; 
+        background: #050510; 
       }
       ::-webkit-scrollbar-thumb {
-        background: #334155; 
-        border-radius: 4px;
+        background: rgba(176, 38, 255, 0.2); 
+        border-radius: 10px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #475569; 
+        background: rgba(176, 38, 255, 0.4); 
       }
       .glass-panel {
         background: rgba(255, 255, 255, 0.03);
         backdrop-filter: blur(16px);
         -webkit-backdrop-filter: blur(16px);
         border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .app-container {
+        height: 100vh;
+        height: 100dvh;
       }
     </style>
   <script type="importmap">
@@ -94,7 +106,6 @@
 </head>
   <body>
     <div id="root"></div>
-    <!-- Entry point for the application -->
     <script type="module" src="./index.tsx"></script>
   </body>
 </html>
