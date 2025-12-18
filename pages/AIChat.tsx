@@ -25,7 +25,11 @@ export const AIChatPage = () => {
     const checkConnection = async () => {
       if (typeof window.aistudio !== 'undefined') {
         const hasKey = await window.aistudio.hasSelectedApiKey();
-        if (hasKey) establishLink();
+        if (hasKey) {
+          // Initialize session silently if key exists
+          chatSession.current = getGeminiChat();
+          setIsConnected(true);
+        }
       }
     };
     checkConnection();
@@ -37,9 +41,15 @@ export const AIChatPage = () => {
 
   const establishLink = async () => {
     try {
+      // Trigger the selection dialog
       await checkApiKey();
-      chatSession.current = getGeminiChat();
+      
+      // MANDATORY: Immediately assume success to avoid race conditions with hasSelectedApiKey()
       setIsConnected(true);
+      
+      // Initialize the session with a fresh AI instance
+      chatSession.current = getGeminiChat();
+      
       if (messages.length === 1) {
         setMessages(prev => [...prev, { role: 'model', text: "Neural link established. Accessing Gemini 3 Pro reasoning core. How can I assist you today?" }]);
       }
@@ -58,6 +68,9 @@ export const AIChatPage = () => {
     setIsTyping(true);
 
     try {
+      // Create fresh chat instance if needed to ensure we use the current key
+      if (!chatSession.current) chatSession.current = getGeminiChat();
+      
       const result: GenerateContentResponse = await chatSession.current.sendMessage({
         message: userMsg
       });

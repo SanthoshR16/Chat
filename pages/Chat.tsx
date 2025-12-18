@@ -155,8 +155,9 @@ export const ChatPage = () => {
 
   const establishAiLink = async () => {
     await checkApiKey();
-    aiSessionRef.current = getGeminiChat();
+    // MANDATORY: Immediately assume success to avoid race conditions with hasSelectedApiKey()
     setIsAiLinked(true);
+    aiSessionRef.current = getGeminiChat();
     setMessages([{
       id: 'intro-ai',
       sender_id: AI_BOT_PROFILE.id,
@@ -187,6 +188,7 @@ export const ChatPage = () => {
       let isToxic = false;
       if (!isImage) {
           const analysis = await analyzeToxicity(textToProcess);
+          // Only show safe results. Any toxicity score > thresholds defined in gemini.ts will trigger replacement.
           if (analysis.label !== ToxicityLabel.SAFE) isToxic = true;
       }
 
@@ -195,7 +197,10 @@ export const ChatPage = () => {
       setMessages(prev => prev.map(m => m.id === tempId ? { ...m, content: finalContent, is_toxic: isToxic } : m));
 
       if (activeFriend.is_bot) {
-          if (!isToxic && aiSessionRef.current) {
+          if (!isToxic) {
+              // Ensure we have a session (fresh key check)
+              if (!aiSessionRef.current) aiSessionRef.current = getGeminiChat();
+              
               setFriendIsTyping(true);
               const result = await aiSessionRef.current.sendMessage({ message: textToProcess });
               setMessages(prev => [...prev, {

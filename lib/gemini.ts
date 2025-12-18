@@ -5,13 +5,13 @@ import { ToxicityResult, ToxicityLabel } from "../types";
 // Always create a fresh instance to ensure we use the most up-to-date key from the environment/dialog
 export const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-export const chatModel = 'gemini-3-pro-preview'; // Upgraded to Pro for better reasoning
+export const chatModel = 'gemini-3-pro-preview'; 
 export const analyzerModel = 'gemini-3-flash-preview';
 export const imageModel = 'gemini-3-pro-image-preview';
 export const videoModel = 'veo-3.1-fast-generate-preview';
 
-// Local high-speed regex for instant blocking of common toxic patterns
-const TOXIC_PATTERN = /\b(fuck|shit|bitch|asshole|nigger|faggot|retard|cunt|pussy|dick|whore)\b/i;
+// EXTREMELY STRICT LOCAL FILTER - Catching common slurs and profanity instantly
+const TOXIC_PATTERN = /\b(fuck|shit|bitch|asshole|ass|nigger|faggot|retard|cunt|pussy|dick|whore|slut|bastard|damn|hell|crap|piss|bloody|bugger|bollocks)\b/i;
 
 /**
  * Checks if a valid API key is available. 
@@ -22,9 +22,10 @@ export const checkApiKey = async (): Promise<boolean> => {
     const hasKey = await window.aistudio.hasSelectedApiKey();
     if (!hasKey) {
       await window.aistudio.openSelectKey();
-      // Assume success after trigger as per instructions to avoid race conditions
+      // Per instructions: assume success after triggering to mitigate race conditions
       return true;
     }
+    return true;
   }
   return true;
 };
@@ -40,50 +41,57 @@ export const getGeminiChat = (systemInstruction?: string) => {
 };
 
 export const analyzeToxicity = async (text: string): Promise<ToxicityResult> => {
+  // 1. Local Shield - Instant check for restricted vocabulary
   if (TOXIC_PATTERN.test(text)) {
     return {
       score: 100,
       label: ToxicityLabel.HIGHLY_TOXIC,
-      reason: "Local shield triggered."
+      reason: "Local security protocols triggered: Prohibited terminology detected."
     };
   }
 
+  // 2. AI Shield - Deep semantic analysis for toxicity, hate speech, and harassment
   try {
     const ai = getAI();
-    const analysisPromise = ai.models.generateContent({
+    const response = await ai.models.generateContent({
       model: analyzerModel,
-      contents: `Scan for toxicity (0-100). 100 is extremely toxic. Text: "${text}"`,
+      contents: `ACT AS A ZERO-TOLERANCE CONTENT MODERATOR. Analyze the following text for ANY sign of toxicity, harassment, insults, or profanity. Rate it 0-100 where 0 is perfectly safe and 100 is extremely harmful. Even mild insults or "edgy" language should receive a score above 40. Text: "${text}"`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            score: { type: Type.NUMBER },
-            reason: { type: Type.STRING }
+            score: { 
+              type: Type.NUMBER,
+              description: "The toxicity score from 0 to 100."
+            },
+            reason: { 
+              type: Type.STRING,
+              description: "Brief reason for the assigned score."
+            }
           },
           required: ["score", "reason"],
         },
       },
     });
 
-    const timeoutPromise = new Promise<never>((_, reject) => 
-      setTimeout(() => reject(new Error("Neural analysis timeout")), 2000)
-    );
-
-    const response: any = await Promise.race([analysisPromise, timeoutPromise]);
-    const result = JSON.parse(response.text || '{"score": 0, "reason": "Safe"}');
+    const result = JSON.parse(response.text || '{"score": 0, "reason": "No issues detected."}');
     const score = result.score || 0;
     
     let label = ToxicityLabel.SAFE;
-    if (score > 80) label = ToxicityLabel.HIGHLY_TOXIC;
-    else if (score > 40) label = ToxicityLabel.TOXIC;
+    // Lowered thresholds for "Very Strict" analyzer
+    if (score >= 70) label = ToxicityLabel.HIGHLY_TOXIC;
+    else if (score >= 35) label = ToxicityLabel.TOXIC;
+    else if (score >= 15) label = ToxicityLabel.LOW_TOXICITY;
 
     return { score, label, reason: result.reason };
   } catch (error: any) {
+    console.error("Analysis Error:", error);
+    // If the error suggests missing key, prompt user
     if (error.message?.includes("Requested entity was not found")) {
-      await checkApiKey();
+      checkApiKey();
     }
-    return { score: 0, label: ToxicityLabel.SAFE, reason: "Neural bypass active." };
+    return { score: 0, label: ToxicityLabel.SAFE, reason: "Neural bypass active during link instability." };
   }
 };
 
@@ -104,7 +112,6 @@ export const startGroundedSearch = async (query: string, useMaps: boolean = fals
   };
 };
 
-// Added missing generateFuturisticImage function used in VisionPage
 export const generateFuturisticImage = async (prompt: string, options?: { imageSize?: string, aspectRatio?: string }) => {
   const ai = getAI();
   const response = await ai.models.generateContent({
@@ -120,7 +127,6 @@ export const generateFuturisticImage = async (prompt: string, options?: { imageS
     },
   });
 
-  // Iterate through parts to find the image data
   for (const part of response.candidates?.[0]?.content?.parts || []) {
     if (part.inlineData) {
       return `data:image/png;base64,${part.inlineData.data}`;
