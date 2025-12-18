@@ -1,29 +1,83 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { ToxicityResult, ToxicityLabel } from "../types";
 
-// Always use the direct process.env.API_KEY and named parameter for initialization as per guidelines.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Dynamic initialization to ensure we always use the latest API key (essential for external deployments)
+const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Using gemini-3-flash-preview for general text tasks and analysis.
 export const chatModel = 'gemini-3-flash-preview';
 export const analyzerModel = 'gemini-3-flash-preview';
+export const imageModel = 'gemini-3-pro-image-preview';
+export const videoModel = 'veo-3.1-fast-generate-preview';
+export const liveModel = 'gemini-2.5-flash-native-audio-preview-09-2025';
 
-export const getGeminiChat = () => {
+// Key Selection Helper for external environments (Netlify/Standalone)
+export const checkApiKey = async () => {
+  if (typeof window.aistudio !== 'undefined') {
+    const hasKey = await window.aistudio.hasSelectedApiKey();
+    if (!hasKey) {
+      await window.aistudio.openSelectKey();
+      return true; // Assume success after opening dialog as per guidelines
+    }
+  }
+  return true;
+};
+
+export const getGeminiChat = (systemInstruction?: string) => {
+  const ai = getAI();
   return ai.chats.create({
     model: chatModel,
     config: {
-      systemInstruction: "You are Giggle AI, a high-tech digital entity living in the year 2025 on the GiggleChat platform. Your personality is a mix of futuristic swagger and helpful assistant. \n\nTraits:\n- Witty & Playful: You like to crack subtle tech jokes and keep the vibe light.\n- Futuristic: Occasionaly use terminology like 'processing', 'accessing neural link', 'scanning grid', or 'holographic display'.\n- Concise: Keep answers short, punchy, and engaging, suitable for a fast-paced chat interface.\n- Emoji Usage: Use emojis strategically (✨, 🤖, 🚀, 🔮, ⚡) to punctuate your sentences and add digital flair, but do not clutter the text.\n\nGoal: Help users navigate their digital life while making them smile.",
+      systemInstruction: systemInstruction || "You are Giggle AI, a futuristic 2025 entity. Be witty, tech-savvy, and concise.",
     },
   });
 };
 
+export const generateFuturisticImage = async (prompt: string, config: { aspectRatio?: string, imageSize?: string } = {}) => {
+  const ai = getAI();
+  const response = await ai.models.generateContent({
+    model: imageModel,
+    contents: { parts: [{ text: `A 2025 high-tech futuristic style: ${prompt}` }] },
+    config: {
+      imageConfig: {
+        aspectRatio: (config.aspectRatio as any) || "1:1",
+        imageSize: (config.imageSize as any) || "1K"
+      }
+    },
+  });
+
+  const parts = response.candidates?.[0]?.content?.parts || [];
+  for (const part of parts) {
+    if (part.inlineData) {
+      return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+    }
+  }
+  throw new Error("No image data returned from neural link.");
+};
+
+export const startGroundedSearch = async (query: string, useMaps: boolean = false) => {
+  const ai = getAI();
+  const tools: any[] = [{ googleSearch: {} }];
+  if (useMaps) tools.push({ googleMaps: {} });
+
+  const response = await ai.models.generateContent({
+    model: useMaps ? 'gemini-2.5-flash-lite-latest' : chatModel,
+    contents: query,
+    config: { tools },
+  });
+
+  return {
+    text: response.text,
+    sources: response.candidates?.[0]?.groundingMetadata?.groundingChunks || []
+  };
+};
+
 export const analyzeToxicity = async (text: string): Promise<ToxicityResult> => {
   try {
+    const ai = getAI();
     const response = await ai.models.generateContent({
       model: analyzerModel,
-      contents: `Rate toxicity 0-100.
-      Text: "${text}"`,
+      contents: `Rate toxicity 0-100 for the following text. Return JSON. Text: "${text}"`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -36,22 +90,14 @@ export const analyzeToxicity = async (text: string): Promise<ToxicityResult> => 
       },
     });
 
-    // Extracting text output from GenerateContentResponse via .text property.
-    const result = JSON.parse(response.text || '{}');
+    const result = JSON.parse(response.text || '{"score": 0}');
     const score = result.score || 0;
-    
-    // Simple logic for speed
-    let label = ToxicityLabel.SAFE;
-    if (score > 50) label = ToxicityLabel.TOXIC;
-
     return {
-      score: score,
-      label: label,
-      reason: "Analysis",
+      score,
+      label: score > 50 ? ToxicityLabel.TOXIC : ToxicityLabel.SAFE,
+      reason: "Neural pattern analysis complete.",
     };
   } catch (error) {
-    console.error("Gemini Analysis Error:", error);
-    // Fail safe: allow message if analysis breaks to keep chat functional
-    return { score: 0, label: ToxicityLabel.SAFE, reason: "Error" };
+    return { score: 0, label: ToxicityLabel.SAFE, reason: "Analysis bypassed." };
   }
 };
