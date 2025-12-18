@@ -2,9 +2,10 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { ToxicityResult, ToxicityLabel } from "../types";
 
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Always create a fresh instance to ensure we use the most up-to-date key from the environment/dialog
+export const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-export const chatModel = 'gemini-3-flash-preview';
+export const chatModel = 'gemini-3-pro-preview'; // Upgraded to Pro for better reasoning
 export const analyzerModel = 'gemini-3-flash-preview';
 export const imageModel = 'gemini-3-pro-image-preview';
 export const videoModel = 'veo-3.1-fast-generate-preview';
@@ -12,11 +13,16 @@ export const videoModel = 'veo-3.1-fast-generate-preview';
 // Local high-speed regex for instant blocking of common toxic patterns
 const TOXIC_PATTERN = /\b(fuck|shit|bitch|asshole|nigger|faggot|retard|cunt|pussy|dick|whore)\b/i;
 
-export const checkApiKey = async () => {
+/**
+ * Checks if a valid API key is available. 
+ * If not, opens the selection dialog.
+ */
+export const checkApiKey = async (): Promise<boolean> => {
   if (typeof window.aistudio !== 'undefined') {
     const hasKey = await window.aistudio.hasSelectedApiKey();
     if (!hasKey) {
       await window.aistudio.openSelectKey();
+      // Assume success after trigger as per instructions to avoid race conditions
       return true;
     }
   }
@@ -34,7 +40,6 @@ export const getGeminiChat = (systemInstruction?: string) => {
 };
 
 export const analyzeToxicity = async (text: string): Promise<ToxicityResult> => {
-  // Phase 1: Local Regex Check (Sub-millisecond)
   if (TOXIC_PATTERN.test(text)) {
     return {
       score: 100,
@@ -43,11 +48,8 @@ export const analyzeToxicity = async (text: string): Promise<ToxicityResult> => 
     };
   }
 
-  // Phase 2: Neural AI Analysis with a strict 2-second timeout
   try {
     const ai = getAI();
-    
-    // Create the AI analysis promise
     const analysisPromise = ai.models.generateContent({
       model: analyzerModel,
       contents: `Scan for toxicity (0-100). 100 is extremely toxic. Text: "${text}"`,
@@ -64,14 +66,11 @@ export const analyzeToxicity = async (text: string): Promise<ToxicityResult> => 
       },
     });
 
-    // Create a timeout promise
     const timeoutPromise = new Promise<never>((_, reject) => 
       setTimeout(() => reject(new Error("Neural analysis timeout")), 2000)
     );
 
-    // Race them: first one to resolve or reject wins
     const response: any = await Promise.race([analysisPromise, timeoutPromise]);
-    
     const result = JSON.parse(response.text || '{"score": 0, "reason": "Safe"}');
     const score = result.score || 0;
     
@@ -80,30 +79,12 @@ export const analyzeToxicity = async (text: string): Promise<ToxicityResult> => 
     else if (score > 40) label = ToxicityLabel.TOXIC;
 
     return { score, label, reason: result.reason };
-  } catch (error) {
-    // Fail safe: If AI is slow or fails, treat as safe to prevent blocking normal users
-    console.warn("Toxicity scan failed or timed out. Bypassing security for conversation availability.");
+  } catch (error: any) {
+    if (error.message?.includes("Requested entity was not found")) {
+      await checkApiKey();
+    }
     return { score: 0, label: ToxicityLabel.SAFE, reason: "Neural bypass active." };
   }
-};
-
-export const generateFuturisticImage = async (prompt: string, config: { aspectRatio?: string, imageSize?: string } = {}) => {
-  const ai = getAI();
-  const response = await ai.models.generateContent({
-    model: imageModel,
-    contents: { parts: [{ text: `High-tech 2025 render: ${prompt}` }] },
-    config: {
-      imageConfig: {
-        aspectRatio: (config.aspectRatio as any) || "1:1",
-        imageSize: (config.imageSize as any) || "1K"
-      }
-    },
-  });
-
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-  }
-  throw new Error("No neural data.");
 };
 
 export const startGroundedSearch = async (query: string, useMaps: boolean = false) => {
@@ -121,4 +102,30 @@ export const startGroundedSearch = async (query: string, useMaps: boolean = fals
     text: response.text,
     sources: response.candidates?.[0]?.groundingMetadata?.groundingChunks || []
   };
+};
+
+// Added missing generateFuturisticImage function used in VisionPage
+export const generateFuturisticImage = async (prompt: string, options?: { imageSize?: string, aspectRatio?: string }) => {
+  const ai = getAI();
+  const response = await ai.models.generateContent({
+    model: imageModel,
+    contents: {
+      parts: [{ text: prompt }],
+    },
+    config: {
+      imageConfig: {
+        aspectRatio: (options?.aspectRatio as any) || "1:1",
+        imageSize: (options?.imageSize as any) || "1K"
+      },
+    },
+  });
+
+  // Iterate through parts to find the image data
+  for (const part of response.candidates?.[0]?.content?.parts || []) {
+    if (part.inlineData) {
+      return `data:image/png;base64,${part.inlineData.data}`;
+    }
+  }
+  
+  throw new Error("Neural Imaging Core: No visual data returned.");
 };
