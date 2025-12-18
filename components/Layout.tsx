@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { MessageSquare, Users, User, LogOut, Film, Image, Zap, Globe } from 'lucide-react';
+import { MessageSquare, Users, User, LogOut, Film, Image, Zap, Globe, Radio } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 const NavItem = ({ to, icon: Icon, label, color = 'text-gray-400' }: { to: string, icon: any, label: string, color?: string }) => (
@@ -51,6 +51,7 @@ export const AppLayout = () => {
           <NavItem to="/friends" icon={Users} label="Neural Links" />
           
           <div className="text-[10px] uppercase tracking-widest text-gray-600 font-bold mt-6 mb-2 ml-4">AI Core</div>
+          <NavItem to="/live" icon={Radio} label="Giggle Live" color="text-neon-cyan" />
           <NavItem to="/vision" icon={Image} label="Giggle Vision" color="text-neon-blue" />
           <NavItem to="/cinema" icon={Film} label="Giggle Cinema" color="text-neon-pink" />
           <NavItem to="/intel" icon={Globe} label="Intelligence" color="text-neon-green" />
@@ -72,9 +73,9 @@ export const AppLayout = () => {
       {/* Mobile Nav Bottom */}
       <div className="md:hidden fixed bottom-0 left-0 w-full glass-panel border-t border-white/10 z-50 flex justify-around p-3 pb-safe backdrop-blur-xl">
         <NavLink to="/chat" className={({isActive}) => isActive ? "text-neon-blue" : "text-gray-500"}><MessageSquare /></NavLink>
+        <NavLink to="/live" className={({isActive}) => isActive ? "text-neon-cyan" : "text-gray-500"}><Radio /></NavLink>
         <NavLink to="/vision" className={({isActive}) => isActive ? "text-neon-blue" : "text-gray-500"}><Image /></NavLink>
         <NavLink to="/cinema" className={({isActive}) => isActive ? "text-neon-pink" : "text-gray-500"}><Film /></NavLink>
-        <NavLink to="/intel" className={({isActive}) => isActive ? "text-neon-green" : "text-gray-500"}><Globe /></NavLink>
         <NavLink to="/profile" className={({isActive}) => isActive ? "text-white" : "text-gray-500"}><User /></NavLink>
       </div>
 
