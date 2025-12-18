@@ -1,19 +1,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { Send, Hash, MoreVertical, ShieldAlert, Bot, Image as ImageIcon, Loader2, Sparkles, Zap, Clock, Link2 } from 'lucide-react';
-import { Message, Profile, Friend, ToxicityLabel } from '../types';
-import { analyzeToxicity, getGeminiChat, checkApiKey } from '../lib/gemini';
-import { Chat as GeminiChatType } from '@google/genai';
-import { ProfileViewModal, NeonButton } from '../components/UI';
-
-const AI_BOT_PROFILE: Profile = {
-  id: 'ai-bot-giggle-2025',
-  username: 'Giggle AI',
-  avatar_url: 'https://api.dicebear.com/7.x/bottts/svg?seed=GiggleAI&backgroundColor=b026ff',
-  bio: 'Always online. Always helpful. 🤖',
-  is_bot: true
-};
+import { Send, Hash, MoreVertical, ShieldAlert, Loader2, Zap, Image as ImageIcon, X } from 'lucide-react';
+import { Message, Profile, ToxicityLabel } from '../types';
+import { analyzeToxicity } from '../lib/gemini';
+import { ProfileViewModal } from '../components/UI';
 
 const TOXIC_MARKER = "[[TOXIC_FLAG]]";
 
@@ -35,14 +26,11 @@ export const ChatPage = () => {
   const [newMessage, setNewMessage] = useState('');
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isSending, setIsSending] = useState(false);
-  const [friendIsTyping, setFriendIsTyping] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [viewProfile, setViewProfile] = useState<Profile | null>(null);
-  const [isAiLinked, setIsAiLinked] = useState(false);
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const aiSessionRef = useRef<GeminiChatType | null>(null);
-  const realtimeChannelRef = useRef<any>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 15000);
@@ -56,23 +44,25 @@ export const ChatPage = () => {
       setCurrentUser(data.user);
       fetchFriends(data.user.id);
 
-      const presenceChannel = supabase.channel('global_presence');
+      const presenceChannel = supabase.channel('global_presence', {
+        config: { presence: { key: data.user.id } }
+      });
+
       presenceChannel
         .on('presence', { event: 'sync' }, () => {
           const state = presenceChannel.presenceState();
           const onlineIds = new Set<string>();
           for (const id in state) {
-            // @ts-ignore
-            const userId = state[id][0]?.user_id;
-            if (userId) onlineIds.add(userId);
+            onlineIds.add(id);
           }
           setOnlineUsers(onlineIds);
         })
         .subscribe(async (status) => {
           if (status === 'SUBSCRIBED') {
-            await presenceChannel.track({ user_id: data.user.id });
+            await presenceChannel.track({ online_at: new Date().toISOString() });
           }
         });
+
       return () => { supabase.removeChannel(presenceChannel); };
     };
     init();
@@ -84,37 +74,13 @@ export const ChatPage = () => {
       .select('friend_id, friend:profiles!friends_friend_id_fkey(*)')
       .eq('user_id', userId);
     
-    const realFriends = data ? (data as any[]).map(f => f.friend).filter(f => f) : [];
-    setFriends([AI_BOT_PROFILE, ...realFriends]);
+    const realFriends = data ? (data as any[]).map(f => f.friend).filter(f => f && !f.is_bot) : [];
+    setFriends(realFriends);
   };
 
   useEffect(() => {
     if (!activeFriend || !currentUser) return;
     setMessages([]);
-    setFriendIsTyping(false);
-
-    if (activeFriend.is_bot) {
-      const initAi = async () => {
-        if (typeof window.aistudio !== 'undefined') {
-          const hasKey = await window.aistudio.hasSelectedApiKey();
-          if (hasKey) {
-            aiSessionRef.current = getGeminiChat();
-            setIsAiLinked(true);
-            setMessages([{
-              id: 'intro-ai',
-              sender_id: activeFriend.id,
-              receiver_id: currentUser.id,
-              content: "Neural link established. How can I assist you today? 🤖",
-              created_at: new Date().toISOString()
-            }]);
-          } else {
-            setIsAiLinked(false);
-          }
-        }
-      };
-      initAi();
-      return; 
-    }
 
     const fetchMessages = async () => {
       const { data } = await supabase
@@ -126,22 +92,24 @@ export const ChatPage = () => {
     };
     fetchMessages();
 
-    const channelName = `room_${[currentUser.id, activeFriend.id].sort().join('_')}`;
+    const channelName = `private_chat_${[currentUser.id, activeFriend.id].sort().join('_')}`;
     const channel = supabase.channel(channelName);
-    realtimeChannelRef.current = channel;
 
     channel
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'messages'
+      }, (payload) => {
         const newMsg = payload.new as Message;
-        if (newMsg.sender_id === currentUser.id) return;
-        if ((newMsg.sender_id === activeFriend.id && newMsg.receiver_id === currentUser.id) || 
-            (newMsg.sender_id === currentUser.id && newMsg.receiver_id === activeFriend.id)) {
+        const isTarget = (newMsg.sender_id === activeFriend.id && newMsg.receiver_id === currentUser.id) ||
+                         (newMsg.sender_id === currentUser.id && newMsg.receiver_id === activeFriend.id);
+        
+        if (isTarget) {
             setMessages((prev) => {
-                const exists = prev.some(m => m.id === newMsg.id);
-                if (exists) return prev;
-                return [...prev, newMsg];
+              if (prev.some(m => m.id === newMsg.id)) return prev;
+              return [...prev, newMsg];
             });
-            setFriendIsTyping(false);
         }
       })
       .subscribe();
@@ -151,247 +119,237 @@ export const ChatPage = () => {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, friendIsTyping]);
+  }, [messages]);
 
-  const establishAiLink = async () => {
-    await checkApiKey();
-    // MANDATORY: Immediately assume success to avoid race conditions with hasSelectedApiKey()
-    setIsAiLinked(true);
-    aiSessionRef.current = getGeminiChat();
-    setMessages([{
-      id: 'intro-ai',
-      sender_id: AI_BOT_PROFILE.id,
-      receiver_id: currentUser.id,
-      content: "Neural link established. Accessing 2025 core protocols. 🤖",
-      created_at: new Date().toISOString()
-    }]);
+  const onImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => setPendingImage(reader.result as string);
+      reader.readAsDataURL(file);
+    }
   };
 
-  const processSendMessage = async (content: string, isImage = false) => {
-    if ((!content.trim() && !isImage) || !currentUser || !activeFriend || isSending) return;
+  const processSendMessage = async () => {
+    if ((!newMessage.trim() && !pendingImage) || !currentUser || !activeFriend || isSending) return;
     
     setIsSending(true);
-    const textToProcess = content;
-    setNewMessage(''); 
+    const textContent = newMessage.trim();
+    const imageContent = pendingImage;
+    
+    setNewMessage('');
+    setPendingImage(null);
+
+    // Initial check for toxic content
+    if (!imageContent) {
+      const analysis = await analyzeToxicity(textContent);
+      if (analysis.label === ToxicityLabel.HIGHLY_TOXIC) {
+        alert("Transmission Blocked: Highly toxic content detected by neural shield.");
+        setIsSending(false);
+        return;
+      }
+    }
 
     const tempId = `temp-${Date.now()}`;
     const optimisticMsg: Message = {
         id: tempId,
-        content: textToProcess,
+        content: imageContent ? `[IMAGE]${imageContent}` : textContent,
         sender_id: currentUser.id,
         receiver_id: activeFriend.id,
         created_at: new Date().toISOString()
     };
+    
     setMessages(prev => [...prev, optimisticMsg]);
 
     try {
       let isToxic = false;
-      if (!isImage) {
-          const analysis = await analyzeToxicity(textToProcess);
-          // Only show safe results. Any toxicity score > thresholds defined in gemini.ts will trigger replacement.
-          if (analysis.label !== ToxicityLabel.SAFE) isToxic = true;
+      let finalContent = optimisticMsg.content;
+
+      if (!imageContent) {
+        const analysis = await analyzeToxicity(textContent);
+        if (analysis.label !== ToxicityLabel.SAFE) {
+          isToxic = true;
+          // We mask slightly toxic messages
+          finalContent = `${TOXIC_MARKER}${textContent}`;
+        }
       }
 
-      const finalContent = isToxic ? `${TOXIC_MARKER}${textToProcess}` : (isImage ? `[IMAGE]${textToProcess}` : textToProcess);
-      
-      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, content: finalContent, is_toxic: isToxic } : m));
-
-      if (activeFriend.is_bot) {
-          if (!isToxic) {
-              // Ensure we have a session (fresh key check)
-              if (!aiSessionRef.current) aiSessionRef.current = getGeminiChat();
-              
-              setFriendIsTyping(true);
-              const result = await aiSessionRef.current.sendMessage({ message: textToProcess });
-              setMessages(prev => [...prev, {
-                  id: `ai-${Date.now()}`,
-                  content: result.text || "...",
-                  sender_id: activeFriend.id,
-                  receiver_id: currentUser.id,
-                  created_at: new Date().toISOString()
-              }]);
-              setFriendIsTyping(false);
-          } else if (!isAiLinked) {
-            setMessages(prev => prev.filter(m => m.id !== tempId));
-            alert("Neural link required to speak with AI Bot.");
-          }
-          setIsSending(false);
-          return;
-      }
-
-      const payload: any = {
+      // Try inserting with is_toxic column. 
+      // If it fails with PGRST204, we catch and try without it (fallback).
+      const { data, error } = await supabase.from('messages').insert({
         content: finalContent,
         sender_id: currentUser.id,
         receiver_id: activeFriend.id,
         is_toxic: isToxic
-      };
-
-      const { data, error } = await supabase.from('messages').insert(payload).select().single();
+      }).select().single();
       
       if (error) {
-          const { error: fallbackError } = await supabase.from('messages').insert({
-              content: finalContent,
-              sender_id: currentUser.id,
-              receiver_id: activeFriend.id
-          });
-          if (fallbackError) throw fallbackError;
-      } else if (data) {
-          setMessages(prev => prev.map(m => m.id === tempId ? data : m));
+        if (error.code === 'PGRST204') {
+          // Fallback if column is missing
+          const { data: retryData, error: retryError } = await supabase.from('messages').insert({
+            content: finalContent,
+            sender_id: currentUser.id,
+            receiver_id: activeFriend.id
+          }).select().single();
+          if (retryError) throw retryError;
+          setMessages(prev => prev.map(m => m.id === tempId ? retryData : m));
+        } else {
+          throw error;
+        }
+      } else {
+        setMessages(prev => prev.map(m => m.id === tempId ? data : m));
       }
-    } catch (e: any) {
-      console.error("Critical Messaging Error:", e);
-      if (e.message?.includes("Requested entity was not found")) {
-        setIsAiLinked(false);
-        alert("API Key expired or restricted. Please re-authenticate.");
-      }
+    } catch (e) {
+      console.error(e);
       setMessages(prev => prev.filter(m => m.id !== tempId));
+      alert("Neural sync error. Verify database schema.");
     } finally {
       setIsSending(false);
     }
   };
 
-  const renderMessageContent = (content: string, isToxic: boolean | undefined) => {
-    if (isToxic || content.includes(TOXIC_MARKER)) {
+  const renderMessageContent = (content: any, isToxic: boolean | undefined) => {
+    // FIX [object Object]: Ensure we are dealing with a string
+    const safeContent = typeof content === 'string' ? content : (content && typeof content === 'object' ? JSON.stringify(content) : String(content || ""));
+
+    if (isToxic || safeContent.includes(TOXIC_MARKER)) {
         return (
-            <div className="flex items-center gap-2 text-red-300 italic">
+            <div className="flex items-center gap-2 text-red-300 italic py-1">
                 <ShieldAlert className="w-4 h-4" />
-                <span className="blur-[4px] select-none text-[10px] uppercase font-bold tracking-widest">SIGNAL REFRESHED BY SECURITY</span>
+                <span className="blur-[3px] select-none text-[10px] uppercase font-bold tracking-widest">CONTENT FILTERED</span>
             </div>
         );
     }
-    if (content.startsWith('[IMAGE]')) {
-        return <img src={content.replace('[IMAGE]', '')} className="max-w-full rounded-lg max-h-64 object-cover border border-white/10 shadow-lg" alt="Shared" />;
+    if (safeContent.startsWith('[IMAGE]')) {
+      return (
+        <img 
+          src={safeContent.replace('[IMAGE]', '')} 
+          className="max-w-full rounded-xl max-h-80 object-cover border border-white/10 shadow-lg cursor-pointer hover:opacity-90 transition-all" 
+          alt="Transmission" 
+          onClick={() => window.open(safeContent.replace('[IMAGE]', ''), '_blank')}
+        />
+      );
     }
-    return <p className="text-[15px] md:text-base leading-relaxed whitespace-pre-wrap">{content}</p>;
+    return <p className="text-[15px] md:text-base leading-relaxed whitespace-pre-wrap">{safeContent}</p>;
   };
 
   return (
     <div className="flex h-full overflow-hidden bg-[#050510]">
-      {/* Sidebar - Friend List */}
-      <div className={`w-full lg:w-80 glass-panel border-r border-white/5 flex flex-col ${activeFriend ? 'hidden lg:flex' : 'flex'}`}>
+      <div className={`w-full lg:w-80 glass-panel border-r border-white/5 flex flex-col ${activeFriend ? 'hidden lg:flex' : 'flex'} backdrop-blur-3xl`}>
         <div className="p-6 border-b border-white/5 bg-black/20">
-          <h2 className="text-xl font-display font-bold text-white tracking-wide flex items-center gap-3">
+          <h2 className="text-xl font-display font-bold text-white tracking-widest flex items-center gap-2 uppercase">
             <Hash className="w-5 h-5 text-neon-blue" /> Signals
           </h2>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-          {friends.map(friend => (
+          {friends.length === 0 ? (
+            <div className="text-center py-20 text-gray-600 text-[10px] font-display tracking-[0.4em] uppercase">No neural links</div>
+          ) : friends.map(friend => (
             <button 
               key={friend.id} 
               onClick={() => setActiveFriend(friend)} 
-              className={`w-full flex items-center gap-4 p-4 rounded-2xl transition-all duration-300 ${activeFriend?.id === friend.id ? 'bg-white/10 border-white/20 shadow-[0_0_20px_rgba(255,255,255,0.05)]' : 'hover:bg-white/5 border-transparent'} border`}
+              className={`w-full flex items-center gap-4 p-4 rounded-2xl transition-all border ${activeFriend?.id === friend.id ? 'bg-white/10 border-white/20' : 'hover:bg-white/5 border-transparent'}`}
             >
-               <div className="relative">
-                 <img src={friend.avatar_url} className="w-12 h-12 rounded-full border border-white/10" alt="av" />
-                 {(onlineUsers.has(friend.id) || friend.is_bot) && <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-[#050510]" />}
+               <div className="relative shrink-0">
+                 <img src={friend.avatar_url} className="w-12 h-12 rounded-full border border-white/10 bg-black" alt="av" />
+                 {onlineUsers.has(friend.id) && <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-[#050510] shadow-[0_0_8px_#22c55e]" />}
                </div>
                <div className="text-left flex-1 truncate">
                  <div className="font-bold text-base text-white truncate">{friend.username}</div>
-                 <div className="text-[10px] uppercase text-gray-500 font-bold tracking-wider">{friend.is_bot ? 'AI Neural Core' : 'Direct Uplink'}</div>
+                 <div className="text-[10px] uppercase text-gray-400 font-bold tracking-widest">Link Active</div>
                </div>
             </button>
           ))}
         </div>
       </div>
 
-      {/* Main Chat Area */}
       {activeFriend ? (
         <div className="flex-1 flex flex-col relative bg-black/10">
-          {/* Header */}
-          <div className="glass-panel p-4 md:p-6 flex justify-between items-center border-b border-white/5 z-10">
+          <div className="glass-panel p-4 md:p-6 flex justify-between items-center border-b border-white/5 z-10 backdrop-blur-3xl">
             <div className="flex items-center gap-4">
               <button onClick={() => setActiveFriend(null)} className="lg:hidden p-2 text-gray-400 hover:text-white transition-colors">
                 <Zap className="w-6 h-6" />
               </button>
-              <div className="relative cursor-pointer" onClick={() => setViewProfile(activeFriend)}>
+              <div className="cursor-pointer flex items-center gap-4" onClick={() => setViewProfile(activeFriend)}>
                 <img src={activeFriend.avatar_url} className="w-10 h-10 md:w-12 md:h-12 rounded-full border border-white/10" alt="av" />
-                <div className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#050510] ${onlineUsers.has(activeFriend.id) || activeFriend.is_bot ? 'bg-green-500' : 'bg-gray-600'}`} />
-              </div>
-              <div className="cursor-pointer" onClick={() => setViewProfile(activeFriend)}>
-                <h3 className="font-bold text-white text-base md:text-lg leading-none mb-1">{activeFriend.username}</h3>
-                <span className="text-[10px] text-neon-blue uppercase tracking-[0.2em] flex items-center gap-1 font-bold animate-pulse">
-                   {activeFriend.is_bot && !isAiLinked ? 'LINK REQUIRED' : 'SECURE LINK'}
-                </span>
+                <div>
+                  <h3 className="font-bold text-white text-base md:text-lg tracking-tight">{activeFriend.username}</h3>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-1.5 h-1.5 rounded-full ${onlineUsers.has(activeFriend.id) ? 'bg-green-500 shadow-[0_0_5px_#22c55e]' : 'bg-gray-600'}`} />
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">
+                      {onlineUsers.has(activeFriend.id) ? 'Online' : 'Offline'}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
-            <MoreVertical className="text-gray-500 cursor-pointer hover:text-white" />
+            <MoreVertical className="text-gray-500 cursor-pointer hover:text-white transition-colors" />
           </div>
 
-          {/* Messages List */}
           <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8 custom-scrollbar">
-            {activeFriend.is_bot && !isAiLinked ? (
-              <div className="h-full flex flex-col items-center justify-center text-center max-w-sm mx-auto p-6">
-                <Link2 className="w-16 h-16 text-neon-purple mb-4 animate-pulse" />
-                <h3 className="text-xl font-display font-bold text-white mb-2">Establishing Neural Connection...</h3>
-                <p className="text-gray-400 text-sm mb-8 uppercase tracking-widest leading-loose">The Giggle AI requires an authorized Gemini API Key to operate outside the Studio Grid.</p>
-                <NeonButton onClick={establishAiLink} glow>Connect Neural Key</NeonButton>
-              </div>
-            ) : (
-              <div className="max-w-4xl mx-auto space-y-8">
-                {messages.map((msg, i) => {
-                  const isMe = msg.sender_id === currentUser?.id;
-                  return (
-                    <div key={msg.id || i} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-message-in`}>
-                       <div className={`px-5 py-4 rounded-3xl max-w-[85%] md:max-w-[70%] lg:max-w-[60%] ${
-                         isMe 
-                          ? 'bg-neon-purple text-white rounded-tr-none shadow-[0_8px_30px_rgba(176,38,255,0.2)]' 
-                          : 'bg-slate-800 text-gray-100 rounded-tl-none border border-white/5 shadow-xl'
-                       }`}>
-                          {renderMessageContent(msg.content, msg.is_toxic)}
-                       </div>
-                       <div className={`flex items-center gap-3 mt-2 px-1 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
-                          <span className="text-[10px] text-gray-600 uppercase tracking-widest font-bold">
-                            {formatRelativeTime(msg.created_at, now)}
-                          </span>
-                          {isMe && <span className="text-[8px] text-neon-blue/60 font-black uppercase tracking-[0.2em]">Delivered</span>}
-                       </div>
-                    </div>
-                  );
-                })}
-                {friendIsTyping && (
-                  <div className="flex items-center gap-2 text-[10px] text-neon-blue animate-pulse ml-2 font-bold tracking-widest uppercase">
-                    <Bot className="w-3 h-3" /> Neural thinking...
+            <div className="max-w-4xl mx-auto space-y-6">
+              {messages.map((msg, i) => {
+                const isMe = msg.sender_id === currentUser?.id;
+                return (
+                  <div key={msg.id || i} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-message-in`}>
+                     <div className={`px-5 py-3 rounded-2xl max-w-[85%] md:max-w-[70%] lg:max-w-[60%] ${
+                        isMe 
+                          ? 'bg-neon-purple text-white rounded-tr-none shadow-[0_8px_20px_rgba(176,38,255,0.1)]' 
+                          : 'bg-slate-800/80 text-gray-100 rounded-tl-none border border-white/5 shadow-xl backdrop-blur-sm'
+                     }`}>
+                        {renderMessageContent(msg.content, msg.is_toxic)}
+                     </div>
+                     <span className="text-[9px] text-gray-500 mt-1.5 uppercase font-bold tracking-tighter">{formatRelativeTime(msg.created_at, now)}</span>
                   </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-            )}
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </div>
           </div>
 
-          {/* Input Area */}
-          {(!activeFriend.is_bot || isAiLinked) && (
-            <div className="p-4 md:p-6 lg:p-8 bg-gradient-to-t from-[#050510] to-transparent">
-              <div className="flex gap-4 items-end max-w-4xl mx-auto">
-                <div className="flex-1 relative group">
+          <div className="p-4 md:p-6 lg:p-10 bg-gradient-to-t from-[#050510] to-transparent">
+            <div className="max-w-4xl mx-auto flex flex-col gap-3">
+              {pendingImage && (
+                <div className="relative w-32 h-32 rounded-xl overflow-hidden border border-neon-blue/50 mb-2 group shadow-2xl">
+                   <img src={pendingImage} className="w-full h-full object-cover" alt="Pending" />
+                   <button onClick={() => setPendingImage(null)} className="absolute top-1 right-1 p-1 bg-black/60 rounded-full text-white hover:bg-red-500 transition-colors">
+                     <X className="w-3 h-3" />
+                   </button>
+                </div>
+              )}
+              
+              <div className="flex gap-4 items-end">
+                <label className="w-14 h-14 md:w-16 md:h-16 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 flex items-center justify-center cursor-pointer transition-all active:scale-95 shadow-lg">
+                  <ImageIcon className="w-6 h-6 text-gray-400" />
+                  <input type="file" accept="image/*" className="hidden" onChange={onImageSelect} />
+                </label>
+
+                <div className="flex-1 relative">
                   <textarea
                       value={newMessage}
                       onChange={(e) => setNewMessage(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); processSendMessage(newMessage); } }}
-                      placeholder={isSending ? "Scanning..." : "Transmit data..."}
-                      className="w-full bg-slate-900/80 backdrop-blur-md border border-white/10 rounded-2xl p-4 md:p-5 text-white focus:outline-none focus:border-neon-blue transition-all resize-none min-h-[60px] max-h-32 custom-scrollbar shadow-2xl"
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); processSendMessage(); } }}
+                      placeholder={pendingImage ? "Describe image..." : "Transmit signal..."}
+                      className="w-full bg-slate-900/80 border border-white/10 rounded-2xl p-4 md:p-5 text-white focus:outline-none focus:border-neon-blue transition-all resize-none max-h-32 shadow-2xl backdrop-blur-md"
                       rows={1}
                   />
-                  {isSending && <div className="absolute right-5 top-1/2 -translate-y-1/2"><Loader2 className="w-5 h-5 animate-spin text-neon-blue" /></div>}
                 </div>
+                
                 <button
-                  onClick={() => processSendMessage(newMessage)}
-                  disabled={!newMessage.trim() || isSending}
-                  className="w-14 h-14 md:w-16 md:h-16 rounded-2xl bg-gradient-to-tr from-neon-purple to-neon-blue flex items-center justify-center hover:scale-105 active:scale-95 transition-all disabled:opacity-50 shadow-xl shadow-neon-blue/20 shrink-0"
+                  onClick={processSendMessage}
+                  disabled={(!newMessage.trim() && !pendingImage) || isSending}
+                  className="w-14 h-14 md:w-16 md:h-16 rounded-2xl bg-gradient-to-tr from-neon-purple to-neon-blue flex items-center justify-center hover:scale-105 active:scale-95 disabled:opacity-50 shrink-0 shadow-lg shadow-neon-blue/20 transition-all"
                 >
-                  <Send className="w-6 h-6 text-white ml-1" />
+                  {isSending ? <Loader2 className="w-6 h-6 animate-spin text-white" /> : <Send className="w-6 h-6 text-white ml-1" />}
                 </button>
               </div>
             </div>
-          )}
+          </div>
         </div>
       ) : (
         <div className="hidden lg:flex flex-1 flex-col items-center justify-center text-gray-700 bg-black/5">
-           <div className="relative mb-8">
-             <Zap className="w-24 h-24 opacity-5 animate-pulse" />
-             <div className="absolute inset-0 bg-neon-blue/10 blur-[60px] rounded-full animate-blob" />
-           </div>
-           <p className="font-display tracking-[0.5em] uppercase text-xs font-bold text-gray-500">Neural Link Offline</p>
-           <p className="text-[10px] uppercase tracking-widest text-gray-600 mt-2">Select a signal to begin transmission</p>
+           <Zap className="w-20 h-20 opacity-5 mb-4 animate-pulse" />
+           <p className="font-display uppercase text-xs tracking-[1em] font-bold text-gray-600">Standby</p>
         </div>
       )}
       {viewProfile && <ProfileViewModal user={viewProfile} isOnline={onlineUsers.has(viewProfile.id)} onClose={() => setViewProfile(null)} />}
